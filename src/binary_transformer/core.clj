@@ -66,6 +66,7 @@
 
 (declare encode-composites)
 (declare encode-composites-size)
+(declare encode-size-inner)
 
 (defmulti  encode-primitive! (fn [type _ _ _] type))
 (defmethod encode-primitive! :int32 [_ field byte-buf data] (.putInt   byte-buf (get data field)))
@@ -94,20 +95,35 @@
 
 (def primitive-size {:int32 4 :int16 2 :int8 1})
 
-(defmulti encode-rule-size #(first (:type %2)))
-(defmethod encode-rule-size :primitive [state rule]
-  (update state :res + (get primitive-size (second (:type rule)))))
-(defmethod encode-rule-size :group [state rule]
-  (update state :res + (get (encode-composites-size (assoc {} :res 0 :data (get (:data state) (:name rule))) (:type rule)) :res)))
+(defmulti encode-rule-size :rule-type)
+(defmethod encode-rule-size :primitive [m]
+  (get primitive-size (:type m)))
+(defmethod encode-rule-size :group [m]
+  (-> {}
+      (assoc :spec-entry-type (:rule-type m)
+             :spec-entry      (:type m))
+      encode-composites-size))
 
-(defmulti encode-composites-size #(first %2))
-(defmethod encode-composites-size :rule [state spec]
-  (encode-rule-size state (second spec)))
-(defmethod encode-composites-size :group [state spec]
-  (reduce encode-composites-size state (second spec)))
+
+(defmulti encode-composites-size :spec-entry-type)
+(defmethod encode-composites-size :rule [m]
+  (-> {}
+      (assoc :rule-type (first (get-in m [:spec-entry :type]))
+             :type (second (get-in m [:spec-entry :type])))
+      encode-rule-size))
+(defmethod encode-composites-size :group [m]
+  (reduce encode-size-inner 0 (:spec-entry m)))
+
+(defn encode-size-inner [size spec-pair]
+  (+ size
+     (-> {}
+         (assoc :spec-entry-type (first spec-pair)
+                :spec-entry (second spec-pair))
+         encode-composites-size)))
 
 (defn encode-size [spec m]
-  (get (reduce encode-composites-size {:res 0 :data m} spec) :res))
+  (reduce encode-size-inner 0 spec))
+
 
 (defn clj->binary
   [spec m]
