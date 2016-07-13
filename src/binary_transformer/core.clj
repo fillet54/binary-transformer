@@ -30,27 +30,46 @@
 ;==============================================================================
 ; Decode functions
 
-(declare decode-composites)
+(declare decode)
 
 (defmulti  decode-primitive (fn [type _] type))
 (defmethod decode-primitive :int32 [_ byte-buf] (.getInt byte-buf))
 (defmethod decode-primitive :int16 [_ byte-buf] (.getShort byte-buf))
 (defmethod decode-primitive :int8  [_ byte-buf] (.get byte-buf))
 
-(defmulti decode-rule #(first (:type %2)))
-(defmethod decode-rule :primitive [state rule]
-  (let [byte-buf (:byte-buf state)
-        field (:name rule)
-        type (second (:type rule))]
-    (assoc-in state [:res field] (decode-primitive type byte-buf))))
-(defmethod decode-rule :group [state rule]
-  (assoc-in state [:res (:name rule)] (get (decode-composites state (:type rule)) :res)))
+(defmulti decode-rule #(cond
+                        (get-in % [:spec-entry :count]) :array
+                        :default                        (:rule-type %)))
+(defmethod decode-rule :primitive [m]
+  (let [{:keys [byte-buf type]} m]
+    (decode-primitive type byte-buf)))
+(defmethod decode-rule :group [m]
+  (let [{:keys [type]} m]
+    (get (reduce decode (assoc m :res {}) type) :res)))
+(defmethod decode-rule :array [m]
+  (let [{:keys [spec-entry]} m
+        count (:count spec-entry)
+        no-count-rule (dissoc spec-entry :count)]
+    (map (fn [_] (decode-rule (assoc m :spec-entry no-count-rule))) (range count))))
 
-(defmulti decode-composites #(first %2))
-(defmethod decode-composites :rule [state spec]
-  (decode-rule state (second spec)))
-(defmethod decode-composites :group [state spec]
-  (reduce decode-composites state (second spec)))
+(defmulti decode-composites :spec-entry-type)
+(defmethod decode-composites :rule [m]
+  (let [{:keys [spec-entry]} m
+        value (-> m
+                  (assoc :rule-type (first  (:type spec-entry))
+                         :type      (second (:type spec-entry)))
+                  decode-rule)
+        field (:name spec-entry)]
+    (assoc-in m [:res field] value)))
+(defmethod decode-composites :group [m]
+  (reduce decode m (:spec-entry m)))
+
+(defn decode [m spec-pair]
+  (-> m
+      (assoc :spec-entry-type (first spec-pair)
+             :spec-entry (second spec-pair))
+      decode-composites
+      (dissoc :spec-entry-type :spec-entry)))
 
 (defn binary->clj
   [spec bytes]
@@ -58,7 +77,7 @@
          (s/valid? ::bytes bytes)]}
   (let [byte-buf (ByteBuffer/wrap (clj->bytes-array bytes))
         spec (s/conform ::binary-spec spec)]
-    (get (reduce decode-composites {:res {} :byte-buf byte-buf} spec) :res)))
+    (get (reduce decode {:res {} :byte-buf byte-buf} spec) :res)))
 
 
 ;==============================================================================

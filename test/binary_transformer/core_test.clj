@@ -2,7 +2,7 @@
   (:require [clojure.test :refer :all]
             [binary-transformer.core :refer :all]))
 
-(deftest simple-tests
+(deftest decode-simple-tests
   (testing "Single integer"
     (is (= {:field1 (unchecked-int 0xABCD1234)} (binary->clj [[:field1 :int32]] [0xAB 0xCD 0x12 0x34]))))
   (testing "Two integers"
@@ -20,7 +20,7 @@
                        [:field3 :int16]]
                       [0xAB 0xCD 0x12 0x34, 0xDC, 0x34 0x52 ])))))
 
-(deftest composite-tests
+(deftest decode-composite-tests
   (let [header [[:field1 :int32] [:field2 :int16]]
         header-res {:field1 (unchecked-int 0xABCD1234) :field2 (unchecked-short 0x7890)}
         header-data [0xAB 0xCD 0x12 0x34, 0x78 0x90]]
@@ -32,6 +32,11 @@
     (testing "Named group"
       (is (= {:header header-res :field3 (unchecked-int 0x98765432)}
              (binary->clj [[:header header] [:field3 :int32]] (concat header-data [0x98 0x76 0x54 0x32])))))))
+
+(deftest decode-array-tests
+  (testing "Primitive list"
+    (is (= {:field1 [(unchecked-byte 0xAB) (unchecked-byte 0x45)]}
+           (binary->clj [[:field1 2 :int8]] [0xAB 0x45])))))
 
 (deftest encode-simple-tests
   (testing "Single primitives"
