@@ -31,12 +31,20 @@
              (binary->clj [header [:field3 :int32]] (concat header-data [0x98 0x76 0x54 0x32])))))
     (testing "Named group"
       (is (= {:header header-res :field3 (unchecked-int 0x98765432)}
-             (binary->clj [[:header header] [:field3 :int32]] (concat header-data [0x98 0x76 0x54 0x32])))))))
+             (binary->clj [[:header header] [:field3 :int32]] (concat header-data [0x98 0x76 0x54 0x32])))))
+    (testing "Nested group"
+      (is (= {:parent {:child {:grandchild (unchecked-byte 0x98)}}}
+             (binary->clj [[:parent [[:child [[:grandchild :int8]]]]]] [0x98]))))))
 
 (deftest decode-array-tests
+  (let [header [[:size :int8]]]
   (testing "Constant Array"
     (is (= {:field1 [(unchecked-byte 0xAB) (unchecked-byte 0x45)]}
-           (binary->clj [[:field1 2 :int8]] [0xAB 0x45])))))
+           (binary->clj [[:field1 2 :int8]] [0xAB 0x45]))))
+  (testing "Variable Array"
+    (is (= {:header {:size (unchecked-byte 0x02)}
+            :field2 [(unchecked-byte 0x45) (unchecked-byte 0x67)]}
+           (binary->clj [[:header header] [:field2 [:header :size] :int8]] [0x02 0x45 0x67]))))))
 
 (deftest encode-simple-tests
   (testing "Single primitives"

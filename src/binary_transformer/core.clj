@@ -2,7 +2,6 @@
   (:require [clojure.spec :as s])
   (:import (java.nio ByteBuffer)))
 
-
 ;==============================================================================
 ; Spec Definitions
 
@@ -12,8 +11,11 @@
                                              #(<= % 0xFFFF)))))
 
 (def primitive-types #{:int32 :int16 :int8})
-(s/def ::rule (s/cat :name keyword? :count (s/? int?) :type (s/or :primitive primitive-types
-                                                                  :group     ::binary-spec)))
+(s/def ::rule (s/cat :name keyword?
+                     :count (s/? int?)
+                     :size-path (s/? (s/coll-of keyword?))
+                     :type (s/or :primitive primitive-types
+                                 :group     ::binary-spec)))
 (s/def ::binary-spec (s/coll-of (s/or :rule  ::rule
                                       :group ::binary-spec)))
 
@@ -40,6 +42,7 @@
 (defn rule-type [m]
   (cond
     (get-in m [:spec-entry :count]) :const-array
+    (get-in m [:spec-entry :size-path]) :var-array
     :default                        (:rule-type m)))
 
 (defmulti decode-rule rule-type)
@@ -48,13 +51,21 @@
     (decode-primitive type byte-buf)))
 (defmethod decode-rule :group [m]
   (let [{:keys [type]} m]
-    (get (reduce decode (assoc m :res {}) type) :res)))
+    (get (reduce decode m type) :res)))
 (defmethod decode-rule :const-array [m]
   (let [{:keys [spec-entry]} m
         count (:count spec-entry)
         no-count-rule (dissoc spec-entry :count)
         no-count-m (assoc m :spec-entry no-count-rule)]
     (map (fn [_] (decode-rule no-count-m)) (range count))))
+(defmethod decode-rule :var-array [m]
+  (let [{:keys [res spec-entry]} m
+        size-path (:size-path spec-entry)
+        count (get-in res size-path)
+        const-array (-> spec-entry
+                        (assoc :count count)
+                        (dissoc :size-path))]
+    (decode-rule (assoc m :spec-entry const-array))))
 
 (defmulti decode-composites :spec-entry-type)
 (defmethod decode-composites :rule [m]
@@ -82,7 +93,6 @@
   (let [byte-buf (ByteBuffer/wrap (clj->bytes-array bytes))
         spec (s/conform ::binary-spec spec)]
     (get (reduce decode {:res {} :byte-buf byte-buf} spec) :res)))
-
 
 ;==============================================================================
 ; Encode functions
@@ -136,7 +146,6 @@
              :spec-entry      (second spec-pair))
       encode-composites))
 
-
 ;;==============================================================================
 ;; Spec size calculation
 
@@ -176,7 +185,6 @@
 (defn encode-size [spec m]
   (reduce encode-size-inner 0 spec))
 
-
 (defn clj->binary
   [spec m]
   {:pre [(s/valid? ::binary-spec spec)]}
@@ -209,8 +217,10 @@
                    [:payload-items [:header :num-payloads] payload]
                    [:option [:header :type] {0 type1 2 type2}]])
 
+  (def header2 [[:field1 :int32] [:field2 :int16]])
+  (s/conform ::binary-spec [[:header header2] [:field3 :int32]])
 
-
+  (s/explain ::binary-spec [[:filed1 [:a :b] :int8]])
 
 
   )
