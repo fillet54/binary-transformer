@@ -34,7 +34,7 @@
              (binary->clj [[:header header] [:field3 :int32]] (concat header-data [0x98 0x76 0x54 0x32])))))))
 
 (deftest decode-array-tests
-  (testing "Primitive list"
+  (testing "Constant Array"
     (is (= {:field1 [(unchecked-byte 0xAB) (unchecked-byte 0x45)]}
            (binary->clj [[:field1 2 :int8]] [0xAB 0x45])))))
 
@@ -57,3 +57,8 @@
     (testing "Named group"
       (is (= (concat header-res (vec (clj->bytes-array [0x54 0x34])))
              (vec (clj->binary [[:header header] [:field3 :int16]] {:header header-data :field3 (unchecked-short 0x5434)})))))))
+
+(deftest encode-array-tests
+  (testing "Constant array"
+    (is (= (vec (clj->bytes-array [0xAB 0x12 0x56]))
+           (vec (clj->binary [[:field1 3 :int8]] {:field1 [(unchecked-byte 0xAB) (unchecked-byte 0x12) (unchecked-byte 0x56)]}))))))
