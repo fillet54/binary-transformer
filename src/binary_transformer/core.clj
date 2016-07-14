@@ -41,9 +41,9 @@
 
 (defn rule-type [m]
   (cond
-    (get-in m [:spec-entry :count]) :const-array
+    (get-in m [:spec-entry :count])     :const-array
     (get-in m [:spec-entry :size-path]) :var-array
-    :default                        (:rule-type m)))
+    :default                            (:rule-type m)))
 
 (defmulti decode-rule rule-type)
 (defmethod decode-rule :primitive [m]
@@ -103,25 +103,22 @@
 (declare encode-size-inner)
 
 (defmulti  encode-primitive! (fn [type _ _] type))
-(defmethod encode-primitive! :int32 [_ byte-buf value] (.putInt   byte-buf value))
-(defmethod encode-primitive! :int16 [_ byte-buf value] (.putShort byte-buf value))
-(defmethod encode-primitive! :int8  [_ byte-buf value] (.put      byte-buf value))
+(defmethod encode-primitive! :int32 [_ byte-buf value] (.putInt   byte-buf (unchecked-int value)))
+(defmethod encode-primitive! :int16 [_ byte-buf value] (.putShort byte-buf (unchecked-short value)))
+(defmethod encode-primitive! :int8  [_ byte-buf value] (.put      byte-buf (unchecked-byte value)))
 
 (defmulti encode-rule rule-type)
 (defmethod encode-rule :primitive [m]
-  (let [{:keys [byte-buf data type spec-entry]} m
-        field (:name spec-entry)
+  (let [{:keys [path byte-buf data type spec-entry]} m
         index (:index spec-entry)
-        value (get data field)
+        value (get-in data path)
         value (if index (nth value index) value)]
     (encode-primitive! type byte-buf value)
     m))
 (defmethod encode-rule :group [m]
-  (let [{:keys [data spec-entry]} m
-        field (:name spec-entry)
-        scoped-data (get data field)]
-    (encode (assoc m :data scoped-data) (:type spec-entry)))
-  m)
+  (let [{:keys [spec-entry]} m]
+    (-> m
+        (encode (:type spec-entry)))))
 (defmethod encode-rule :const-array [m]
   (let [{:keys [spec-entry]} m
         count (:count spec-entry)
@@ -130,13 +127,24 @@
   (dotimes [i count]
     (encode-rule (assoc-in no-count-m [:spec-entry :index] i))))
   m)
+(defmethod encode-rule :var-array [m]
+  (let [{:keys [path data]} m]
+    (-> m
+        (assoc-in [:spec-entry :count] (count (get-in data path)))
+        (update :spec-entry (fn [spec-entry] (dissoc spec-entry :size-path)))
+        encode-rule))
+  m)
 
 (defmulti encode-composites :spec-entry-type)
 (defmethod encode-composites :rule [m]
+  (let [{:keys [path spec-entry]} m]
   (-> m
       (assoc :rule-type (first (get-in m [:spec-entry :type]))
-             :type (second (get-in m [:spec-entry :type])))
-      encode-rule))
+             :type (second (get-in m [:spec-entry :type]))
+             :path (conj path (:name spec-entry)))
+      encode-rule
+      (assoc :path path)
+      (dissoc :rule-type :type))))
 (defmethod encode-composites :group [m]
   (reduce encode m (:spec-entry m)))
 
@@ -153,74 +161,58 @@
 
 (defmulti encode-rule-size rule-type)
 (defmethod encode-rule-size :primitive [m]
-  (get primitive-size (:type m)))
+  (update m :size + (get primitive-size (:type m))))
 (defmethod encode-rule-size :group [m]
-  (-> {}
+  (-> m
       (assoc :spec-entry-type (:rule-type m)
              :spec-entry      (:type m))
-      encode-composites-size))
+      encode-composites-size
+      (dissoc :spec-entry-type :spec-entry)))
 (defmethod encode-rule-size :const-array [m]
   (let [{:keys [spec-entry]} m
         count (:count spec-entry)
         no-count-rule (dissoc spec-entry :count)
         no-count-m (assoc m :spec-entry no-count-rule)]
-    (* count (encode-rule-size no-count-m))))
+    (reduce (fn [m _] (encode-rule-size m)) no-count-m (range count))))
+(defmethod encode-rule-size :var-array [m]
+  (let [{:keys [path data spec-entry]} m
+        size-path (:size-path spec-entry)
+        count (count (get-in data path))]
+    (-> m
+        (update :size + count)
+        (update-in (concat [:data] size-path) (fn [_] count))
+        )))
 
 (defmulti encode-composites-size :spec-entry-type)
 (defmethod encode-composites-size :rule [m]
-  (-> m
-      (assoc :rule-type (first (get-in m [:spec-entry :type]))
-             :type (second (get-in m [:spec-entry :type])))
-      encode-rule-size))
+  (let [{:keys [path spec-entry]} m]
+    (-> m
+        (assoc :rule-type (first (get-in m [:spec-entry :type]))
+               :type (second (get-in m [:spec-entry :type]))
+               :path (conj path (:name spec-entry)))
+        encode-rule-size
+        (assoc :path path)
+        (dissoc :rule-type :type))))
 (defmethod encode-composites-size :group [m]
-  (reduce encode-size-inner 0 (:spec-entry m)))
+  (reduce encode-size-inner m (:spec-entry m)))
 
-(defn encode-size-inner [size spec-pair]
-  (+ size
-     (-> {}
-         (assoc :spec-entry-type (first spec-pair)
-                :spec-entry (second spec-pair))
-         encode-composites-size)))
+(defn encode-size-inner [m spec-pair]
+  (-> m
+      (assoc :spec-entry-type (first spec-pair)
+             :spec-entry (second spec-pair))
+      encode-composites-size
+      (dissoc :spec-entry-type :spec-entry)))
 
-(defn encode-size [spec m]
-  (reduce encode-size-inner 0 spec))
+(defn encode-normalize-and-size[spec data]
+  (let [m (assoc {} :size 0 :data data :path [])]
+    (reduce encode-size-inner m spec)))
 
 (defn clj->binary
-  [spec m]
+  [spec data]
   {:pre [(s/valid? ::binary-spec spec)]}
   (let [spec (s/conform ::binary-spec spec)
-        size (encode-size spec m)
+        {:keys [size data]} (encode-normalize-and-size spec data)
         byte-buf (ByteBuffer/allocate size)]
-    (-> (reduce encode {:byte-buf byte-buf :data m} spec)
+    (-> (reduce encode {:byte-buf byte-buf :data data :path []} spec)
         (get :byte-buf)
         .array)))
-
-(comment
-  (def header [[:header1 :int16]
-               [:header2 :int16]])
-  (def group1 [[group]])
-
-  (s/conform ::binary-spec [[[[:field1 :int32]]] [:header header] [:field2 :int32]])
-  (encode-size
-    (s/conform ::binary-spec [[:group [[:field1 5 :int32]]]])
-    {:field1 (unchecked-int 0xABCD1234)})
-
-  (s/conform ::binary-spec [[:group 5 [[:field1 :int32]]]])
-
-  (def header [[:sync :uint32 0xCFCFCFCF]
-               [:num-payloads :unint32]])
-
-  (def payload [[:id :uint16]
-                [:data :uint16]])
-
-  (def my-message [[:header header]
-                   [:payload-items [:header :num-payloads] payload]
-                   [:option [:header :type] {0 type1 2 type2}]])
-
-  (def header2 [[:field1 :int32] [:field2 :int16]])
-  (s/conform ::binary-spec [[:header header2] [:field3 :int32]])
-
-  (s/explain ::binary-spec [[:filed1 [:a :b] :int8]])
-
-
-  )
