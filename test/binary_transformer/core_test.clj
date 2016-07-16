@@ -98,3 +98,20 @@
     (testing "Variable array"
       (is (= (int8 [0x02 0x45 0x67])
              (vec (clj->binary [[:header header] [:field2 [:header :size] :int8]] {:field2 (int8 [0x45 0x67])})))))))
+
+(deftest sandbox
+  (let [header [[:id :int32]
+               [:type :int16]
+               [:other-id :int32]
+               [:size :int32]]
+        item [[:a :int32]]
+        message [[:header header]
+                [:items [:header :size] :int32]]]
+  (testing "Random"
+    (is (= []
+           (vec
+             (clj->binary message {:header {:id 0x12345678
+                                            :type 0x1ABC
+                                            :other-id 0x1987
+                                            :size 5}
+                                   :items [0x12345678 0x13345678 0x14345678 0x15345678 0x16345678]})))))))
