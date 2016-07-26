@@ -7,5 +7,8 @@
 
   :main ^:skip-aot binary-transformer.core
   :target-path "target/%s"
+  :java-source-paths ["src/java"]
+  :source-paths ["src/clj"]
+  :test-paths ["test/clj"]
   :profiles {:uberjar {:aot :all}
              :dev {:dependencies [[org.clojure/test.check "0.9.0"]]}})

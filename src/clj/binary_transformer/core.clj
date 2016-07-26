@@ -1,9 +1,14 @@
 (ns binary-transformer.core
   (:require [clojure.spec :as s])
-  (:import (java.nio ByteBuffer)))
+  (:import (java.nio ByteBuffer)
+           (fiftycuatro.util WrappingBitBuffer)))
 
 ;==============================================================================
 ; Spec Definitions
+
+(defn keyword-or-int? [x]
+  (or (keyword? x)
+      (int? x)))
 
 (s/def ::bytes (s/or :byte-array bytes?
                      :num-sequence (s/* (s/and int?
@@ -17,22 +22,21 @@
 (defmulti entry-args-spec :type)
 (defmethod entry-args-spec :group [_] ::binary-spec)
 (s/def ::size (s/or :const-size int? :path-to-size (s/coll-of keyword?)))
-(defmethod entry-args-spec :array [_] (s/cat :item-type (s/or :spec ::binary-spec
+(defmethod entry-args-spec :array [_] (s/cat :item-type (s/or :spec (s/spec ::binary-spec)
                                                               :type keyword?)
                                              :options (s/keys* :req-un [::size])))
-(defmethod entry-args-spec :default [_] (s/* ::s/any))
+(s/def ::n-bits int?)
+(defmethod entry-args-spec :int [_] (s/keys* :req-un [::n-bits]))
 
-(defn keyword-or-int? [x]
-  (or (keyword? x)
-      (int? x)))
+(defmethod entry-args-spec :default [_] (s/* ::s/any))
 
 ;; Note that args are conformed later in the process
 (s/def ::entry (s/cat :name keyword-or-int?
                       :type keyword?
-                      :args (s/* ::s/any)))
+                      :raw-args (s/* ::s/any)))
 
 (s/def ::binary-spec (s/* (s/or :entry        ::entry
-                                      :nested-spec  ::binary-spec)))
+                                :nested-spec  ::binary-spec)))
 
 ;==============================================================================
 ; Conversion functions
@@ -54,33 +58,33 @@
               (let [spec-entry (apply hash-map spec-entry)]
                 (if (:entry spec-entry)
                   (let [entry (:entry spec-entry)
-                        args (s/conform (entry-args-spec entry) (:args entry))
+                        args (s/conform (entry-args-spec entry) (:raw-args entry))
                         entry (assoc entry :args args)]
                     (f (assoc m :entry entry)))
                   (reduce-spec m (:nested-spec spec-entry) f))))
             m spec)))
 
+
 ;(defmulti encode-preprocess type-selector)
 ;(defmulti encode-type type-selector)
 ;(defmulti decode-preprocess type-selector)
 (defmulti decode-type type-selector)
-(defmethod decode-type :int32 [m]
+(defmethod decode-type :int [m]
   (let [{:keys [entry path bits]} m
-        path (conj path (:name entry))
-        value (.getInt bits)]
-    (assoc-in m path value)))
+        field-path (conj path (:name entry))
+        value (.getInt bits (get-in entry [:args :n-bits]))]
+    (assoc-in m field-path value)))
 
-(defmethod decode-type :int16 [m]
-  (let [{:keys [entry path bits]} m
-        path (conj path (:name entry))
-        value (.getShort bits)]
-    (assoc-in m path value)))
-
-(defmethod decode-type :int8 [m]
-  (let [{:keys [entry path bits]} m
-        path (conj path (:name entry))
-        value (.get bits)]
-    (assoc-in m path value)))
+; I would rather use substitution if possible when i get preprocess going
+(defmacro decode-integer [type length]
+  (defmethod decode-type type [m]
+    (let [{:keys [entry path bits]} m
+          path (conj path (:name entry))
+          value (.getInt bits length)]
+      (assoc-in m path value))))
+(decode-integer :int32 32)
+(decode-integer :int16 16)
+(decode-integer :int8 8)
 
 (defmethod decode-type :group [m]
   (let [{:keys [entry path]} m
@@ -92,30 +96,28 @@
         (assoc :path path :entry entry))))
 
 (defmethod decode-type :array [m]
-  (let [{:keys [entry path]} m
-        args (:args entry)
+  (let [{path :path {:keys [args raw-args] :as entry} :entry} m
         {:keys [const-size path-to-size]} (apply hash-map (get-in args [:options :size]))
         size (or const-size
                  (get-in m (concat [:result] path-to-size)))
-        item-type (apply hash-map (:item-type args))
         spec (->> (range size)
                   (map (fn [i]
-                         (cond
-                           (:spec item-type) [i :group (:spec item-type)]
-                           (:type item-type) [i (:type item-type)])))
-                  ;(sort-by first)
+                         (let [item-type (apply hash-map (:item-type args))]
+                           (cond
+                             (:spec item-type) [i :group (first raw-args)]
+                             (:type item-type) [i (:type item-type)]))))
                   (s/conform ::binary-spec))
         array-path (conj path (:name entry))]
+    (println spec)
     (-> m
         (assoc :path array-path)
-        (assoc-in array-path (vec (repeat size nil)))
+        (assoc-in array-path [])
         (reduce-spec spec decode-type)
         (assoc :path path))))
 
-
 (defn decode [spec byte-buf]
   (let [spec (s/conform ::binary-spec spec)
-        bits (ByteBuffer/wrap (clj->bytes-array byte-buf))]
+        bits (WrappingBitBuffer/wrap (clj->bytes-array byte-buf))]
     (-> {:path [:result] :result {} :bits bits}
         ;(reduce-spec spec decode-preprocess)
         (reduce-spec spec decode-type)
@@ -126,8 +128,16 @@
   (def header [[:sync :int8]
                [:size :int8]])
 
+  (def item [[:id :int :n-bits 8]
+             [:value :int8]])
+
   (def message [[:header :group header]
-                [:items :array :int8 :size 5]])
+                [:items :array item :size 5]])
+
+  (def spec (s/conform ::binary-spec message))
+  (def entry (second (second spec)))
+
+  (s/conform (entry-args-spec entry) (:args entry))
 
   (decode message [0xAB, 0x0A, 0x09 0x08 0x07 0x06 0x05 0x04 0x03 0x02 0x01 0x00])
 
