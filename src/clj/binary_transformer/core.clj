@@ -27,6 +27,7 @@
                                              :options (s/keys* :req-un [::size])))
 (s/def ::n-bits int?)
 (defmethod entry-args-spec :int [_] (s/keys* :req-un [::n-bits]))
+(defmethod entry-args-spec :uint [_] (s/keys* :req-un [::n-bits]))
 
 (defmethod entry-args-spec :default [_] (s/* ::s/any))
 
@@ -46,8 +47,7 @@
                    (s/conform ::bytes)
                    (apply hash-map))]
     (or (:byte-array bytes)
-        (into-array Byte/TYPE (map unchecked-byte (:num-sequence bytes))))))
-
+        (byte-array (count (:num-sequence bytes)) (:num-sequence bytes)))))
 
 ;==============================================================================
 ; Encode/Decode functions
@@ -74,17 +74,11 @@
         field-path (conj path (:name entry))
         value (.getInt bits (get-in entry [:args :n-bits]))]
     (assoc-in m field-path value)))
-
-; I would rather use substitution if possible when i get preprocess going
-(defmacro decode-integer [type length]
-  (defmethod decode-type type [m]
-    (let [{:keys [entry path bits]} m
-          path (conj path (:name entry))
-          value (.getInt bits length)]
-      (assoc-in m path value))))
-(decode-integer :int32 32)
-(decode-integer :int16 16)
-(decode-integer :int8 8)
+(defmethod decode-type :uint [m]
+  (let [{:keys [entry path bits]} m
+        field-path (conj path (:name entry))
+        value (.getUnsignedInt bits (get-in entry [:args :n-bits]))]
+    (assoc-in m field-path value)))
 
 (defmethod decode-type :group [m]
   (let [{:keys [entry path]} m
@@ -108,7 +102,6 @@
                              (:type item-type) [i (:type item-type)]))))
                   (s/conform ::binary-spec))
         array-path (conj path (:name entry))]
-    (println spec)
     (-> m
         (assoc :path array-path)
         (assoc-in array-path [])
@@ -125,21 +118,23 @@
 
 (comment
 
-  (def header [[:sync :int8]
-               [:size :int8]])
+  (def header [[:sync :uint :n-bits 8]
+               [:size :int :n-bits 8]])
 
   (def item [[:id :int :n-bits 8]
-             [:value :int8]])
+             [:value :int :n-bits 8]])
 
   (def message [[:header :group header]
-                [:items :array item :size 5]])
+                [:items :array item :size [:header :size]]])
 
   (def spec (s/conform ::binary-spec message))
   (def entry (second (second spec)))
 
   (s/conform (entry-args-spec entry) (:args entry))
 
-  (decode message [0xAB, 0x0A, 0x09 0x08 0x07 0x06 0x05 0x04 0x03 0x02 0x01 0x00])
+  (decode message [0xAB, 0x05, 0xFF 0x08 0x07 0x06 0x05 0x04 0x03 0x02 0x01 0x00])
+
+  (macroexpand `(decode-integer :int8 8 .getInt))
 
 
   )

@@ -55,35 +55,41 @@ public class WrappingBitBuffer implements BitBuffer {
     }
 
     @Override
-    public int getInt() {
-        return getInt(32);
-    }
-
-    @Override
-    public int getInt(ByteOrder order) {
-        return getInt(32, order);
-    }
-
-    @Override
     public int getInt(int nBits) {
         return getInt(nBits, this.order);
     }
 
+    private final static byte[] signMasks = { (byte)0x80, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40};
+    private final static byte[] twosCompMasks = { 0x7F, 0x00, 0x01, 0x03, 0x07, 0x0F, 0x1F, 0x3F};
     @Override
     public int getInt(int nBits, ByteOrder order) {
-        return ByteBuffer.wrap(getBytes(4, nBits, order))
+        byte[] bytes = getBytes(4, nBits, order);
+        int bytesUsed = ((nBits - 1) / 8) + 1;
+        int msbIdx = order == ByteOrder.BIG_ENDIAN ? 4 - bytesUsed : bytesUsed - 1;
+        int bitloc = signMasks[(nBits % 8)];
+        int sign = (bytes[msbIdx] & bitloc) == 0 ? 1 : -1;
+
+        if (sign == -1) {
+            // twos complement convert
+            bytes[msbIdx] = (byte)((~bytes[msbIdx] & twosCompMasks[nBits % 8]) + 1);
+        }
+
+        return sign
+                * ByteBuffer.wrap(bytes)
                 .order(order)
                 .getInt();
     }
 
     @Override
-    public long getLong() {
-        return getLong(64);
+    public long getUnsignedInt(int nBits) {
+        return getUnsignedInt(nBits, this.order);
     }
 
     @Override
-    public long getLong(ByteOrder order) {
-        return getLong(64, order);
+    public long getUnsignedInt(int nBits, ByteOrder order) {
+        return ByteBuffer.wrap(getBytes(4, nBits, order))
+                .order(order)
+                .getInt() & 0xFFFFFFFFl;
     }
 
     @Override
