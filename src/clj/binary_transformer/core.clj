@@ -6,21 +6,13 @@
 ;==============================================================================
 ; Spec Definitions
 
-(defn keyword-or-int? [x]
-  (or (keyword? x)
-      (int? x)))
-
 (s/def ::bytes (s/or :byte-array bytes?
                      :num-sequence (s/* (s/and int?
                                              #(>= % 0)
                                              #(<= % 0xFFFF)))))
 
-
-(defn type-selector [m] (get-in m [:entry :type]))
-
-
 ;; Note that args are conformed later in the process
-(s/def ::entry (s/cat :name keyword-or-int?
+(s/def ::entry (s/cat :name (some-fn keyword? int?)
                       :type keyword?
                       :raw-args (s/* ::s/any)))
 
@@ -65,6 +57,8 @@
                   (reduce-spec m (:nested-spec spec-entry) f))))
             m spec)))
 
+
+(defn type-selector [m] (get-in m [:entry :type]))
 
 ;(defmulti encode-preprocess type-selector)
 ;(defmulti encode-type type-selector)

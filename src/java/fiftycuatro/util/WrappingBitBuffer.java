@@ -32,8 +32,7 @@ public class WrappingBitBuffer implements BitBuffer {
 
     private byte getByteInShort(Short s, int bitsInShort, int bitsToGet) {
         int shift = (bitsInShort > 8 ? 16 : 8) - (8 - bitsInShort) - bitsToGet;
-        int mask = masks[bitsToGet];
-        return (byte)((s >> shift) & mask);
+        return (byte)((s >> shift) & masks[bitsToGet]);
     }
 
     /**
@@ -70,7 +69,7 @@ public class WrappingBitBuffer implements BitBuffer {
      */
     private byte[] getBytes(int nBytes, int nBits, boolean isSigned, ByteOrder order) {
         byte[] bytes = new byte[nBytes];
-        int bytesForBits = ((nBits -1) / 8) + 1;
+        int bytesForBits = ((nBits - 1) / 8) + 1;
         int startIndex = order == ByteOrder.BIG_ENDIAN ? 4 - bytesForBits : 0;
 
         for(int bitsLeft = nBits, i = startIndex; bitsLeft > 0; bitsLeft -= 8, i++) {
