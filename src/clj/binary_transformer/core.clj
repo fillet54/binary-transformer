@@ -18,18 +18,6 @@
 
 (defn type-selector [m] (get-in m [:entry :type]))
 
-;; Extend to conform arguments
-(defmulti entry-args-spec :type)
-(defmethod entry-args-spec :group [_] ::binary-spec)
-(s/def ::size (s/or :const-size int? :path-to-size (s/coll-of keyword?)))
-(defmethod entry-args-spec :array [_] (s/cat :item-type (s/or :spec (s/spec ::binary-spec)
-                                                              :type keyword?)
-                                             :options (s/keys* :req-un [::size])))
-(s/def ::n-bits int?)
-(defmethod entry-args-spec :int [_] (s/keys* :req-un [::n-bits]))
-(defmethod entry-args-spec :uint [_] (s/keys* :req-un [::n-bits]))
-
-(defmethod entry-args-spec :default [_] (s/* ::s/any))
 
 ;; Note that args are conformed later in the process
 (s/def ::entry (s/cat :name keyword-or-int?
@@ -39,6 +27,19 @@
 (s/def ::binary-spec (s/* (s/or :entry        ::entry
                                 :nested-spec  ::binary-spec)))
 
+;; Extend to conform arguments
+(defmulti entry-args-spec :type)
+(defmethod entry-args-spec :group [_] ::binary-spec)
+(s/def ::size (s/or :const-size int? :path-to-size (s/coll-of keyword?)))
+(s/def ::type (s/or :spec (s/spec ::binary-spec)
+                    :inline keyword?))
+(defmethod entry-args-spec :array [_] (s/keys* :req-un [::size ::type]))
+
+(s/def ::n-bits int?)
+(defmethod entry-args-spec :int [_] (s/keys* :req-un [::n-bits]))
+(defmethod entry-args-spec :uint [_] (s/keys* :req-un [::n-bits]))
+
+(defmethod entry-args-spec :default [_] (s/* ::s/any))
 ;==============================================================================
 ; Conversion functions
 
@@ -90,16 +91,17 @@
         (assoc :path path :entry entry))))
 
 (defmethod decode-type :array [m]
-  (let [{path :path {:keys [args raw-args] :as entry} :entry} m
-        {:keys [const-size path-to-size]} (apply hash-map (get-in args [:options :size]))
-        size (or const-size
-                 (get-in m (concat [:result] path-to-size)))
+  (let [{:keys [entry path]} m
+        args (:args entry)
+        size-opts (apply hash-map (:size args))
+        size (or (:const-size size-opts)
+                 (get-in m (concat [:result] (:path-to-size size-opts))))
         spec (->> (range size)
                   (map (fn [i]
-                         (let [item-type (apply hash-map (:item-type args))]
+                         (let [type (apply hash-map (:type args))]
                            (cond
-                             (:spec item-type) [i :group (first raw-args)]
-                             (:type item-type) [i (:type item-type)]))))
+                             (:spec type) [i :group (s/unform ::binary-spec (:spec type))]
+                             (:inline type) (into [i (:inline type)] (:type-options args))))))
                   (s/conform ::binary-spec))
         array-path (conj path (:name entry))]
     (-> m
@@ -116,25 +118,3 @@
         (reduce-spec spec decode-type)
         :result)))
 
-(comment
-
-  (def header [[:sync :uint :n-bits 8]
-               [:size :int :n-bits 8]])
-
-  (def item [[:id :int :n-bits 8]
-             [:value :int :n-bits 8]])
-
-  (def message [[:header :group header]
-                [:items :array item :size [:header :size]]])
-
-  (def spec (s/conform ::binary-spec message))
-  (def entry (second (second spec)))
-
-  (s/conform (entry-args-spec entry) (:args entry))
-
-  (decode message [0xAB, 0x05, 0xFF 0x08 0x07 0x06 0x05 0x04 0x03 0x02 0x01 0x00])
-
-  (macroexpand `(decode-integer :int8 8 .getInt))
-
-
-  )

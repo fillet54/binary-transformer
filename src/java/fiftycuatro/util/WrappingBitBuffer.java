@@ -84,9 +84,9 @@ public class WrappingBitBuffer implements BitBuffer {
 
             // Only have to worry about items that have
             // most significant bit set
-            if ((bytes[msbIndex] & signMasks[nBits % 8]) == 1) {
+            if ((bytes[msbIndex] & signMasks[nBits % 8]) != 0) {
                 bytes[msbIndex] = (byte)(bytes[msbIndex] | twosCompMasks[nBits % 8]);
-                if ((bytes[msbIndex] & signMasks[nBits % 8]) == 0x1) {
+                if ((bytes[msbIndex] & signMasks[nBits % 8]) != 0) {
                     int start = order == ByteOrder.BIG_ENDIAN ? 0 : bytesForBits;
                     int end = order == ByteOrder.BIG_ENDIAN ? startIndex : nBytes;
                     for (int i = start; i < end; i++) {
