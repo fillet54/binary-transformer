@@ -3,7 +3,8 @@
   :url "http://philgomez.com/binary-transformer"
   :license {:name "MIT License"
             :url "https://github.com/fillet54/binary-transformer/blob/master/LICENSE"}
-  :dependencies [[org.clojure/clojure "1.9.0-alpha9"]]
+  :dependencies [[org.clojure/clojure "1.9.0-alpha12"]
+                 [org.clojure/core.match "0.3.0-alpha4"]]
 
   :main ^:skip-aot binary-transformer.core
   :target-path "target/%s"

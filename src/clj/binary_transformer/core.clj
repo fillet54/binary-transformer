@@ -1,5 +1,6 @@
 (ns binary-transformer.core
-  (:require [clojure.spec :as s])
+  (:require [clojure.spec :as s]
+            [clojure.core.match :refer [match]])
   (:import (java.nio ByteBuffer)
            (fiftycuatro.util WrappingBitBuffer)))
 
@@ -14,7 +15,7 @@
 ;; Note that args are conformed later in the process
 (s/def ::entry (s/cat :name (some-fn keyword? int?)
                       :type keyword?
-                      :raw-args (s/* ::s/any)))
+                      :raw-args (s/* any?)))
 
 (s/def ::binary-spec (s/* (s/or :entry        ::entry
                                 :nested-spec  ::binary-spec)))
@@ -22,7 +23,8 @@
 ;; Extend to conform arguments
 (defmulti entry-args-spec :type)
 (defmethod entry-args-spec :group [_] ::binary-spec)
-(s/def ::size (s/or :const-size int? :path-to-size (s/coll-of keyword?)))
+(s/def ::size (s/or :const-size int?
+                    :path-to-size (s/coll-of keyword?)))
 (s/def ::type (s/or :spec (s/spec ::binary-spec)
                     :inline keyword?))
 (defmethod entry-args-spec :array [_] (s/keys* :req-un [::size ::type]))
@@ -31,7 +33,7 @@
 (defmethod entry-args-spec :int [_] (s/keys* :req-un [::n-bits]))
 (defmethod entry-args-spec :uint [_] (s/keys* :req-un [::n-bits]))
 
-(defmethod entry-args-spec :default [_] (s/* ::s/any))
+(defmethod entry-args-spec :default [_] (s/* any?))
 ;==============================================================================
 ; Conversion functions
 
@@ -45,18 +47,18 @@
 ;==============================================================================
 ; Encode/Decode functions
 
+(defn single-entry [m entry f]
+  (let [args (s/conform (entry-args-spec entry) (:raw-args entry))
+        entry (assoc entry :args args)]
+    (f (assoc m :entry entry))))
+
 (defn reduce-spec [m spec f]
   (let [m (if (:spec m) m (assoc m :spec spec))]
     (reduce (fn [m spec-entry]
-              (let [spec-entry (apply hash-map spec-entry)]
-                (if (:entry spec-entry)
-                  (let [entry (:entry spec-entry)
-                        args (s/conform (entry-args-spec entry) (:raw-args entry))
-                        entry (assoc entry :args args)]
-                    (f (assoc m :entry entry)))
-                  (reduce-spec m (:nested-spec spec-entry) f))))
+              (match spec-entry
+                     [:entry entry] (single-entry m entry f)
+                     [:nested-spec entry] (reduce-spec m entry f)))
             m spec)))
-
 
 (defn type-selector [m] (get-in m [:entry :type]))
 
@@ -87,15 +89,14 @@
 (defmethod decode-type :array [m]
   (let [{:keys [entry path]} m
         args (:args entry)
-        size-opts (apply hash-map (:size args))
-        size (or (:const-size size-opts)
-                 (get-in m (concat [:result] (:path-to-size size-opts))))
+        size (match (:size args)
+                    [:const-size const-size] const-size
+                    [:path-to-size absolute-path] (get-in m (concat [:result] absolute-path)))
         spec (->> (range size)
                   (map (fn [i]
-                         (let [type (apply hash-map (:type args))]
-                           (cond
-                             (:spec type) [i :group (s/unform ::binary-spec (:spec type))]
-                             (:inline type) (into [i (:inline type)] (:type-options args))))))
+                         (match (:type args)
+                                [:spec conformed-spec] [i :group (s/unform ::binary-spec conformed-spec)]
+                                [:inline type] (into [i type] (:type-options args)))))
                   (s/conform ::binary-spec))
         array-path (conj path (:name entry))]
     (-> m
@@ -111,4 +112,3 @@
         ;(reduce-spec spec decode-preprocess)
         (reduce-spec spec decode-type)
         :result)))
-
