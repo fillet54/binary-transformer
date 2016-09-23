@@ -1,6 +1,6 @@
 (ns binary-transformer.core-test
   (:require [clojure.test :refer :all]
-            [binary-transformer.core :refer :all]))
+            [binary-transformer.core :as b]))
 
 ;;==============================================================================
 ;; Helper methods
@@ -29,56 +29,56 @@
 
 (deftest decode-integer-tests
   (testing "Single integer"
-    (is (= {:field1 (int32 0xABCD1234)} (decode [[:field1 :int :n-bits 32]] [0xAB 0xCD 0x12 0x34]))))
+    (is (= {:field1 (int32 0xABCD1234)} (b/decode [[:field1 ::b/int ::b/n-bits 32]] [0xAB 0xCD 0x12 0x34]))))
   (testing "Two integers"
     (is (= {:field1 (int32 0xABCD1234)
             :field2 (int32 0x34523454)}
-           (decode [[:field1 :int :n-bits 32]
-                    [:field2 :int :n-bits 32]]
+           (b/decode [[:field1 ::b/int ::b/n-bits 32]
+                    [:field2 ::b/int ::b/n-bits 32]]
                    [0xAB 0xCD 0x12 0x34, 0x34 0x52 0x34 0x54]))))
   (testing "Multiple primitive types"
     (is (= {:field1 (int32 0xABCD1234)
             :field2 (int8 0xDC)
             :field3 (int16 0x3452)}
-           (decode [[:field1 :int :n-bits 32]
-                    [:field2 :int :n-bits 8]
-                    [:field3 :int :n-bits 16]]
+           (b/decode [[:field1 ::b/int ::b/n-bits 32]
+                    [:field2 ::b/int ::b/n-bits 8]
+                    [:field3 ::b/int ::b/n-bits 16]]
                    [0xAB 0xCD 0x12 0x34, 0xDC, 0x34 0x52 ])))))
 
  (deftest decode-composite-tests
-   (let [header [[:field1 :int :n-bits 32] [:field2 :int :n-bits 16]]
+   (let [header [[:field1 ::b/int ::b/n-bits 32] [:field2 ::b/int ::b/n-bits 16]]
          header-res {:field1 (int32 0xABCD1234) :field2 (int16 0x7890)}
          header-data [0xAB 0xCD 0x12 0x34, 0x78 0x90]]
      (testing "Single composition"
-       (is (= header-res (decode [header] header-data))))
+       (is (= header-res (b/decode [header] header-data))))
      (testing "Inline composition"
        (is (= (merge header-res {:field3 (int32 0x98765432)})
-              (decode [header [:field3 :int :n-bits 32]] (concat header-data [0x98 0x76 0x54 0x32])))))
+              (b/decode [header [:field3 ::b/int ::b/n-bits 32]] (concat header-data [0x98 0x76 0x54 0x32])))))
      (testing "Named group"
        (is (= {:header header-res :field3 (int32 0x98765432)}
-              (decode [[:header :group header] [:field3 :int :n-bits 32]] (concat header-data [0x98 0x76 0x54 0x32])))))
+              (b/decode [[:header ::b/group header] [:field3 ::b/int ::b/n-bits 32]] (concat header-data [0x98 0x76 0x54 0x32])))))
      (testing "Nested group"
        (is (= {:parent {:child {:grandchild (int8 0x98)}}}
-              (decode [[:parent :group [:child :group [:grandchild :int :n-bits 8]]]] [0x98]))))))
+              (b/decode [[:parent ::b/group [:child ::b/group [:grandchild ::b/int ::b/n-bits 8]]]] [0x98]))))))
 
 (deftest decode-array-tests
-  (let [header [:size :int :n-bits 8]]
+  (let [header [:size ::b/int ::b/n-bits 8]]
     (testing "Constant array"
       (is (= {:field1 (int8 [0xAB 0x45])}
-             (decode [[:field1 :array :type :int :type-options [:n-bits 8] :size 2]] [0xAB 0x45]))))
+             (b/decode [[:field1 ::b/array ::b/type ::b/int ::b/type-args [::b/n-bits 8] ::b/size 2]] [0xAB 0x45]))))
     (testing "Variable array"
       (is (= {:header {:size (int8 0x02)}
               :field2 (int8 [0x45 0x67])}
-             (decode [[:header :group header] [:field2 :array :type :int
-                                                              :type-options [:n-bits 8]
-                                                              :size [:header :size]]] [0x02 0x45 0x67]))))
+             (b/decode [[:header ::b/group header] [:field2 ::b/array ::b/type ::b/int
+                                                              ::b/type-args [::b/n-bits 8]
+                                                              ::b/size [:header :size]]] [0x02 0x45 0x67]))))
     (testing "Array of specs"
-      (let [sample [[:f1 :int :n-bits 8]
-                    [:f2 :int :n-bits 8]]]
+      (let [sample [[:f1 ::b/int ::b/n-bits 8]
+                    [:f2 ::b/int ::b/n-bits 8]]]
       (is (= {:header {:size (int8 0x2)}
               :values [{:f1 0x3 :f2 06}
                        {:f1 0x7 :f2 0x34}]}
-             (decode [[:header :group header] [:values :array :type sample :size 2]] [0x2 0x3 0x6 0x7 0x34])))))))
+             (b/decode [[:header ::b/group header] [:values ::b/array ::b/type sample ::b/size 2]] [0x2 0x3 0x6 0x7 0x34])))))))
 ;;
 ;; (deftest encode-simple-tests
 ;;   (testing "Single primitives"

@@ -4,7 +4,11 @@
   :license {:name "MIT License"
             :url "https://github.com/fillet54/binary-transformer/blob/master/LICENSE"}
   :dependencies [[org.clojure/clojure "1.9.0-alpha12"]
-                 [org.clojure/core.match "0.3.0-alpha4"]]
+
+                 ; tools.analyzer has a conflict with core.async. Excluding from core.match and
+                 ; adding updated one manually. core.match hasn't been updated since Feb 2015
+                 [org.clojure/core.match "0.3.0-alpha4" :exclusions [org.clojure/tools.analyzer.jvm]]
+                 [org.clojure/tools.analyzer.jvm "0.6.10"]]
 
   :main ^:skip-aot binary-transformer.core
   :target-path "target/%s"

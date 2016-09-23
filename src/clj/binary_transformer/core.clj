@@ -1,39 +1,47 @@
 (ns binary-transformer.core
   (:require [clojure.spec :as s]
-            [clojure.core.match :refer [match]])
-  (:import (java.nio ByteBuffer)
-           (fiftycuatro.util WrappingBitBuffer)))
+            [clojure.core.match :as m])
+  (:import (fiftycuatro.util WrappingBitBuffer))
+  (:refer-clojure :exclude [compile]))
 
 ;==============================================================================
 ; Spec Definitions
 
 (s/def ::bytes (s/or :byte-array bytes?
                      :num-sequence (s/* (s/and int?
-                                             #(>= % 0)
-                                             #(<= % 0xFFFF)))))
+                                               #(>= % 0)
+                                               #(<= % 0xFFFF)))))
 
 ;; Note that args are conformed later in the process
-(s/def ::entry (s/cat :name (some-fn keyword? int?)
+(s/def ::entry (s/cat :name (some-fn keyword? int? nil?)
                       :type keyword?
-                      :raw-args (s/* any?)))
+                      :args (s/* any?)))
 
-(s/def ::binary-spec (s/* (s/or :entry        ::entry
-                                :nested-spec  ::binary-spec)))
+(s/def ::binary-spec (s/* (s/or :entry  ::entry
+                                :nested ::binary-spec)))
 
 ;; Extend to conform arguments
 (defmulti entry-args-spec :type)
-(defmethod entry-args-spec :group [_] ::binary-spec)
+
+;; group
+(defmethod entry-args-spec ::group [_] ::binary-spec)
+
+;; array
 (s/def ::size (s/or :const-size int?
                     :path-to-size (s/coll-of keyword?)))
 (s/def ::type (s/or :spec (s/spec ::binary-spec)
                     :inline keyword?))
-(defmethod entry-args-spec :array [_] (s/keys* :req-un [::size ::type]))
+(s/def ::type-args (s/* any?))
+(defmethod entry-args-spec ::array [_] (s/keys* :req [::size ::type]
+                                                :opt [::type-args]))
 
+;; integers
 (s/def ::n-bits int?)
-(defmethod entry-args-spec :int [_] (s/keys* :req-un [::n-bits]))
-(defmethod entry-args-spec :uint [_] (s/keys* :req-un [::n-bits]))
+(defmethod entry-args-spec ::int [_] (s/keys* :req [::n-bits]))
+(defmethod entry-args-spec ::uint [_] (s/keys* :req [::n-bits]))
 
 (defmethod entry-args-spec :default [_] (s/* any?))
+
 ;==============================================================================
 ; Conversion functions
 
@@ -47,68 +55,92 @@
 ;==============================================================================
 ; Encode/Decode functions
 
-(defn single-entry [m entry f]
-  (let [args (s/conform (entry-args-spec entry) (:raw-args entry))
-        entry (assoc entry :args args)]
-    (f (assoc m :entry entry))))
+(declare compile-entry)
 
-(defn reduce-spec [m spec f]
-  (let [m (if (:spec m) m (assoc m :spec spec))]
-    (reduce (fn [m spec-entry]
-              (match spec-entry
-                     [:entry entry] (single-entry m entry f)
-                     [:nested-spec entry] (reduce-spec m entry f)))
-            m spec)))
+;; Compile fns take a env and an entry and return a decode fn
+;; Decode fns take a result map and bitbuffer and returns a result map
+(defmulti compile :type)
 
-(defn type-selector [m] (get-in m [:entry :type]))
+;==============================================================================
+; Integer types
 
-;(defmulti encode-preprocess type-selector)
-;(defmulti encode-type type-selector)
-;(defmulti decode-preprocess type-selector)
-(defmulti decode-type type-selector)
-(defmethod decode-type :int [m]
-  (let [{:keys [entry path bits]} m
-        field-path (conj path (:name entry))
-        value (.getInt bits (get-in entry [:args :n-bits]))]
-    (assoc-in m field-path value)))
-(defmethod decode-type :uint [m]
-  (let [{:keys [entry path bits]} m
-        field-path (conj path (:name entry))
-        value (.getUnsignedInt bits (get-in entry [:args :n-bits]))]
-    (assoc-in m field-path value)))
+(defmethod compile ::int8   [entry] (compile (assoc entry :args {::n-bits 8}  :type ::int)))
+(defmethod compile ::int16  [entry] (compile (assoc entry :args {::n-bits 16} :type ::int)))
+(defmethod compile ::int32  [entry] (compile (assoc entry :args {::n-bits 32} :type ::int)))
+(defmethod compile ::int64  [entry] (compile (assoc entry :args {::n-bits 64} :type ::int)))
+(defmethod compile ::uint8  [entry] (compile (assoc entry :args {::n-bits 8}  :type ::uint)))
+(defmethod compile ::uint16 [entry] (compile (assoc entry :args {::n-bits 16} :type ::uint)))
+(defmethod compile ::uint32 [entry] (compile (assoc entry :args {::n-bits 32} :type ::uint)))
+(defmethod compile ::uint64 [entry] (compile (assoc entry :args {::n-bits 64} :type ::uint)))
 
-(defmethod decode-type :group [m]
-  (let [{:keys [entry path]} m
-        group-path (conj path (:name entry))
-        group-spec (:args entry)]
-    (-> m
-        (assoc :path group-path :entry group-spec)
-        (reduce-spec group-spec decode-type)
-        (assoc :path path :entry entry))))
+(defmethod compile ::int [entry]
+  (let [name (:name entry)
+        n-bits (get-in entry [:args ::n-bits])]
+    (fn [m path bits]
+      (let [path (if name (conj path name) path)]
+        (assoc-in m path (.getInt bits n-bits))))))
 
-(defmethod decode-type :array [m]
-  (let [{:keys [entry path]} m
-        args (:args entry)
-        size (match (:size args)
-                    [:const-size const-size] const-size
-                    [:path-to-size absolute-path] (get-in m (concat [:result] absolute-path)))
-        spec (->> (range size)
-                  (map (fn [i]
-                         (match (:type args)
-                                [:spec conformed-spec] [i :group (s/unform ::binary-spec conformed-spec)]
-                                [:inline type] (into [i type] (:type-options args)))))
-                  (s/conform ::binary-spec))
-        array-path (conj path (:name entry))]
-    (-> m
-        (assoc :path array-path)
-        (assoc-in array-path [])
-        (reduce-spec spec decode-type)
-        (assoc :path path))))
+(defmethod compile ::uint [entry]
+  (let [name (:name entry)
+        n-bits (get-in entry [:args ::n-bits])]
+    (fn [m path bits]
+      (let [path (if name (conj path name) path)]
+        (assoc-in m path (.getUnsignedInt bits n-bits))))))
 
-(defn decode [spec byte-buf]
-  (let [spec (s/conform ::binary-spec spec)
-        bits (WrappingBitBuffer/wrap (clj->bytes-array byte-buf))]
-    (-> {:path [:result] :result {} :bits bits}
-        ;(reduce-spec spec decode-preprocess)
-        (reduce-spec spec decode-type)
-        :result)))
+;==============================================================================
+; Composite types
+
+(defmethod compile ::group [entry]
+  (let [{:keys [args name]} entry
+        decode-fns (reduce compile-entry [] args)]
+    (fn [m path bits]
+      (let [path (if name (conj path name) path)]
+        (reduce
+          (fn [m f] (f m path bits))
+          m decode-fns)))))
+
+(defmethod compile ::array [entry]
+  (let [{:keys [args name]} entry
+        resolve-size (m/match (::size args)
+                              [:const-size size] (fn [_] size)
+                              [:path-to-size size-path] (fn [m] (get-in m size-path)))
+        decode-fns (m/match (::type args)
+                            [:inline type] (let [entry-args (s/conform (entry-args-spec {:type type}) (::type-args args))
+                                                 entry (-> (s/conform ::entry [nil type])
+                                                           (assoc :args entry-args))]
+                                             (compile entry))
+                            [:spec spec] (reduce compile-entry [] spec))]
+    (fn [m path bits]
+      (let [path (if name (conj path name) path)
+            size (resolve-size m)
+            m (assoc-in m path [])]
+        (if (fn? decode-fns)
+          (reduce (fn [m index] (decode-fns m (conj path index) bits)) m (range size))
+          (reduce (fn [m index]
+                    (let [path (conj path index)
+                          m (assoc-in m path {})]
+                      (reduce (fn [m f] (f m path bits)) m decode-fns))) m (range size)))))))
+
+
+(defn compile-entry [fns entry]
+  (m/match entry
+           [:entry e] (let [args (s/conform (entry-args-spec e) (:args e))
+                            entry (assoc e :args args)]
+                        (conj fns (compile entry)))
+           [:nested spec] (into [] (concat fns (reduce compile-entry fns spec)))))
+
+;; Returns a sequence of decode fns
+(defn compile-spec [spec]
+  (let [spec (s/conform ::binary-spec spec)]
+    (reduce compile-entry [] spec)))
+
+;; Executes a sequence of decocde fns
+(defn decode-spec [fns bytes]
+  (let [bits (WrappingBitBuffer/wrap (clj->bytes-array bytes))]
+    (reduce (fn [m f] (f m [] bits)) {} fns)))
+
+
+(defn decode [spec bytes]
+  (decode-spec (compile-spec spec) bytes))
+
+
